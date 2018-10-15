@@ -2,112 +2,142 @@
 
 from PIL import Image, ImageEnhance
 import pytesseract
+import tesserocr
 import queue
+from captcha.image import ImageCaptcha
+import random
+from claptcha import Claptcha
+from itertools import groupby
 
+number = ['0','1','2','3','4','5','6','7','8','9']
+alphabet = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z']
+ALPHABET = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z']
+
+def get_random_text(char_set = number + alphabet + ALPHABET, char_num = 4):
+    li = []
+    for i in range(char_num):
+        c = random.choice(char_set)
+        li.append(c)
+    return ''.join(li)
+
+def Claptcha_get(char_text):
+    c = Claptcha(char_text, 'C:\Windows\Fonts\ARIALUNI.TTF')
+    captcha = c.write('./' + char_text + '.jpg')
+    text, im = c.image
+    return text, im
+
+def Captcha_get(char_text):
+    im = ImageCaptcha()
+    im.write(char_text, './' + char_text + '.jpg')
+    chptcha = im.generate(char_text)
+    chptcha = Image.open(chptcha)
+    return chptcha
 
 def binarizing(img,threshold):
-    """传入image对象进行灰度、二值处理"""
-    img = img.convert("L") # 转灰度
+    img = img.convert('L')
     pixdata = img.load()
     w, h = img.size
-    # 遍历所有像素，大于阈值的为黑色
-    for y in range(h):
-        for x in range(w):
-            if pixdata[x, y] < threshold:
-                pixdata[x, y] = 0
+    for i in range(h):
+        for j in range(w):
+            if pixdata[j, i] < threshold:
+                pixdata[j, i] = 0
             else:
+                pixdata[j, i] = 255
+    return img
+
+def depoint(img):
+    pixdata = img.load()
+    w, h = img.size
+    for y in range(1, h-1):
+        for x in range(1, w-1):
+            count = 0
+            if pixdata[x, y-1] > 245:
+                count = count + 1
+            if pixdata[x, y+1] > 245:
+                count = count + 1
+            if pixdata[x-1, y] > 245:
+                count = count + 1
+            if pixdata[x+1, y] > 245:
+                count = count + 1
+            if pixdata[x-1, y-1] > 245:
+                count = count + 1
+            if pixdata[x-1, y+1] > 245:
+                count = count + 1
+            if pixdata[x+1, y-1] > 245:
+                count = count + 1
+            if pixdata[x+1, y+1] > 245:
+                count = count + 1
+            if count > 4:
                 pixdata[x, y] = 255
     return img
 
 def vertical(img):
-    """传入二值化后的图片进行垂直投影"""
     pixdata = img.load()
-    w,h = img.size
-    ver_list = []
-    # 开始投影
+    w, h = img.size
+    ver_li = []
     for x in range(w):
         black = 0
         for y in range(h):
-            if pixdata[x,y] == 0:
+            if pixdata[x, y] == 0:
                 black += 1
-        ver_list.append(black)
-    # 判断边界
-    l,r = 0,0
+        ver_li.append(black)
+    left = 0
+    right = 0
     flag = False
     cuts = []
-    for i,count in enumerate(ver_list):
-        # 阈值这里为0
-        if flag is False and count > 0:
-            l = i
+    for i, count in enumerate(ver_li):
+        if not flag and count > 10:
+            left = i
             flag = True
-        if flag and count == 0:
-            r = i-1
+        if flag and count < 10:
             flag = False
-            cuts.append((l,r))
+            right = i - 1
+            cuts.append((left, right))
     return cuts
 
-
 def cfs(img):
-    """传入二值化后的图片进行连通域分割"""
     pixdata = img.load()
-    w,h = img.size
+    w, h = img.size
     visited = set()
-    q = queue.Queue()
-    offset = [(-1,-1),(0,-1),(1,-1),(-1,0),(1,0),(-1,1),(0,1),(1,1)]
+    offset = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
     cuts = []
+    q = queue.Queue()
     for x in range(w):
         for y in range(h):
             x_axis = []
-            y_axis = []
-            if pixdata[x,y] == 0 and (x,y) not in visited:
-                q.put((x,y))
-                visited.add((x,y))
+            if pixdata[x, y] == 0 and (x, y) not in visited:
+                q.put((x, y))
+                visited.add((x, y))
             while not q.empty():
-                x_p,y_p = q.get()
-                for x_offset,y_offset in offset:
-                    x_c,y_c = x_p+x_offset,y_p+y_offset
-                    if (x_c,y_c) in visited:
+                x_p, y_p = q.get()
+                for x_offset, y_offset in offset:
+                    x_c, y_c = x_p + x_offset, y_p + y_offset
+                    if (x_c, y_c) in visited:
                         continue
-                    visited.add((x_c,y_c))
+                    visited.add((x_c, y_c))
                     try:
-                        if pixdata[x_c,y_c] == 0:
-                            q.put((x_c,y_c))
+                        if pixdata[x_c, y_c] == 0:
+                            q.put((x_c, y_c))
                             x_axis.append(x_c)
-                            y_axis.append(y_c)
                     except:
                         pass
-            if x_axis:
-                min_x,max_x = min(x_axis),max(x_axis)
-                min_y,max_y = min(y_axis),max(y_axis)
-                if max_x - min_x >  3:
-                    # 宽度小于3的认为是噪点，根据需要修改
-                    cuts.append((min_x,min_y,max_x,max_y))
+            if len(x_axis) != 0:
+                min_x = min(x_axis)
+                max_x = max(x_axis)
+                if max_x - min_x > 5:
+                    cuts.append((min_x, max_x))
     return cuts
 
-if __name__=='__main__':
 
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
-    img = Image.open(r'./captcha0HBAA.jpg')
-    binimg = binarizing(img, 127)
-    cuts = cfs(binimg)
-    if len(cuts)<4:
-        num = 0
-        max = cuts[num][2]-cuts[num][0]
-        for i in cuts:
-            temp = i[2]-i[0]
-            if temp > max:
-                num = i
-                max = temp
-        a = (cuts[num][0]+max//2+1, cuts[num][1], cuts[num][2], cuts[num][3])
-        b = (cuts[num][0],cuts[num][1],cuts[num][0]+max//2,cuts[num][3])
-        del cuts[num]
-        cuts.insert(num, a)
-        cuts.insert(num, b)
-    str_img = ''
-    for i, n in enumerate(cuts, 1):
-        pic = binimg.crop(n)
-        # pic.save('cut%s.jpg'%i)
-        str_img += pytesseract.image_to_string(pic, lang='eng', config='-psm 10')
-    print(str_img)
+if __name__ == "__main__":
+    im = Image.open('./ocr7.png')
+    im = binarizing(im, 170)
+    for i in range(3):
+        im = depoint(im)
+    cuts = cfs(im)
+    print(cuts)
+    w, h = im.size
+    for i, c in enumerate(cuts, 1):
+        im.crop((c[0], 0, c[1], h)).save('./'+str(i)+'.png')
 
 
